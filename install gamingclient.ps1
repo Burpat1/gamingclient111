@@ -1,79 +1,88 @@
-# Save as `install_gaming_clients.ps1`
-# Right-click → "Run with PowerShell" (or deploy via NTLite Post-Setup).
-
-# Self-elevate to Admin
+# Run as administrator (required for winget installs)
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Start-Process pwsh.exe "-NoProfile -File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs
     exit
 }
 
-$tempDir = "$env:TEMP\GameClients"
-New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+# ===== Apps to install via WINGET (most reliable) =====
+$wingetApps = @(
+    "Discord.Discord",          # Official Discord
+    "OBSProject.OBSStudio",     # Official OBS Studio
+    "RiotGames.RiotClient"      # Riot Client (includes League of Legends)
+)
 
-$apps = @(
-    @{ 
-        Name = "Discord"
-        URL = "https://discord.com/api/downloads/distributions/app/installers/latest?platform=win&arch=x86"
-        Installer = "DiscordSetup.exe"
-        Args = "/S"
-    },
-    @{ 
-        Name = "OBS Studio"
-        URL = "https://cdn-fastly.obsproject.com/downloads/OBS-Studio-30.0.2-Full-x64.exe"
-        Installer = "OBS-Studio.exe"
-        Args = "/S"
-    },
-    @{ 
+# ===== Apps to install via direct download (for game clients not in winget) =====
+$directDownloadApps = @(
+    @{
         Name = "Steam"
         URL = "https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe"
         Installer = "SteamSetup.exe"
         Args = "/S"
     },
-    @{ 
+    @{
         Name = "Battle.Net"
-        URL = "https://www.battle.net/download/getInstallerForGame?os=win&installer=Battle.net-Setup.exe"
+        URL = "https://www.battle.net/download/getInstaller?os=win&installer=Battle.net-Setup.exe"
         Installer = "BattleNetSetup.exe"
         Args = "/S"
     },
-    @{ 
+    @{
         Name = "Epic Games Launcher"
         URL = "https://launcher-public-service-prod06.ol.epicgames.com/launcher/api/installer/download/EpicGamesLauncherInstaller.msi"
         Installer = "EpicInstaller.msi"
-        Args = "/qn"
+        Args = "/qn /norestart"
     },
-    @{ 
+    @{
         Name = "Ubisoft Connect"
         URL = "https://ubi.li/4vxt9"
         Installer = "UbisoftConnect.exe"
         Args = "/S"
-    },
-    @{ 
-        Name = "Riot Client"
-        URL = "https://riotgamespatcher-a.akamaihd.net/releases/live/installer/deploy/Riot%20Client%20Installer.exe"
-        Installer = "RiotClientInstaller.exe"
-        Args = "--launch-product=league_of_legends --launch-patchline=live"
     }
 )
 
-foreach ($app in $apps) {
-    Write-Host "=== Installing $($app.Name) ==="
+# ===== 1. INSTALL VIA WINGET =====
+Write-Host "=== Installing apps via winget ===" -ForegroundColor Cyan
+foreach ($app in $wingetApps) {
+    try {
+        Write-Host "Installing $app..."
+        winget install --id $app --accept-package-agreements --accept-source-agreements --silent
+        Write-Host "[SUCCESS] $app installed." -ForegroundColor Green
+    }
+    catch {
+        Write-Host "[ERROR] Failed to install $app : $_" -ForegroundColor Red
+    }
+}
+
+# ===== 2. INSTALL VIA DIRECT DOWNLOAD (fallback for non-winget apps) =====
+$tempDir = "$env:TEMP\GameClients"
+New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+Write-Host "`n=== Installing game clients via direct download ===" -ForegroundColor Cyan
+foreach ($app in $directDownloadApps) {
     $installerPath = Join-Path -Path $tempDir -ChildPath $app.Installer
     
     try {
         # Download
-        Invoke-WebRequest -Uri $app.URL -OutFile $installerPath -UserAgent "Wget" -ErrorAction Stop
-        
+        Write-Host "Downloading $($app.Name)..."
+        Invoke-WebRequest -Uri $app.URL -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
+
         # Install
-        Start-Process -FilePath $installerPath -ArgumentList $app.Args -Wait -NoNewWindow
+        Write-Host "Installing $($app.Name)..."
+        if ($app.Installer.EndsWith('.msi')) {
+            Start-Process "msiexec.exe" -ArgumentList "/i `"$installerPath`" $($app.Args)" -Wait -NoNewWindow
+        } else {
+            Start-Process -FilePath $installerPath -ArgumentList $app.Args -Wait -NoNewWindow
+        }
         
         Write-Host "[SUCCESS] $($app.Name) installed." -ForegroundColor Green
     }
     catch {
         Write-Host "[ERROR] Failed to install $($app.Name): $_" -ForegroundColor Red
     }
+    finally {
+        if (Test-Path $installerPath) { Remove-Item $installerPath -Force }
+    }
 }
 
 # Cleanup
-Remove-Item -Path $tempDir -Recurse -Force
-Write-Host "=== All installations completed. ==="
-Read-Host "Press Enter to exit..."
+Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "`n=== All installations completed! ===" -ForegroundColor Green
